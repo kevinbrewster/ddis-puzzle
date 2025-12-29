@@ -1,0 +1,81 @@
+%define REG(r) [REGS + r * 4]
+%define PTR(p) [MEM + p]
+
+U5_LE:
+    mov ecx, 0x200
+    mov edi, MEM
+    mov esi, DISK                   ; DISK = page 2 text?
+    rep movsb                       ; copy 1st 512 bytes from DISK to MEM
+SPIN:
+    mov edx, REG(63)                ; fetch instruction  ( REG(63) = program counter )
+    mov edx, PTR(edx)               ; edx = 32-bit instruction
+    add WORD REG(63), 4
+    mov WORD REG(0), 0
+
+    mov ebp, edx
+    shr ebp, 21
+    and ebp, 77o                    ; ebp = bits 26-21 of inst'n = destination register #
+    mov esi, edx
+    shr esi, 15
+    and esi, 77o                    ; esi = bits 20-15 of instruction
+    mov edi, edx
+    shr edi, 9
+    and edi, 77o                    ; edi = bits 14-9 of instruction
+
+    mov eax, edx
+    shr eax, 27                     ; eax = bits 31-27 of instruction = op code
+    mov eax, [OP_TABLE + eax * 4]
+    jmp eax                         ; execute instruction
+
+OP_TABLE:
+    dd OP_LOAD_B, OP_LOAD_H, OP_LOAD_W, 0, OP_STORE_B, OP_STORE_H, OP_STORE_W, \
+    0, OP_ADD, OP_MUL, OP_DIV, OP_NOR, 0, 0, 0, 0, OP_MOVI, 0, OP_CMOV, 0, 0,  \
+    0, 0, 0, OP_IN, OP_OUT, OP_READ, OP_WRITE, 0, 0, 0, OP_HALT
+
+OP_LOAD_W:
+    mov eax, REG(esi)
+    add eax, REG(edi)
+    mov eax, PTR(eax)
+    mov REG(ebp), eax
+    jmp SPIN
+
+OP_MUL:
+    mov eax, REG(esi)
+    mul DWORD REG(edi)
+    mov REG(ebp), eax
+    jmp SPIN
+
+OP_MOVI:                 ; -- MOVe Immediate (constant) value to register # ebp
+    mov eax, edx         ; (edx = 32-bit instruction)
+    mov ecx, edx
+    shr eax, 5
+    and eax, 0xffff      ;  eax =  bits 20-5  of instruction
+    and ecx, 37o         ;  ecs =  bits  4-0  of instruction
+    shl eax, cl          ;  eax = (bits 20-5) * 2^(bits 4-0)
+    mov REG(ebp), eax    ; (ebp =  bits 26-21 of instruction)
+    jmp SPIN
+
+OP_CMOV:                 ; -- Conditional MOVe
+    mov eax, REG(edi)    ;                      (edi = bits 14-9 of instruction)
+    test eax, eax        ; IF  register # edi is not 0
+    jz .F
+    mov eax, REG(esi)    ;                     (esi = bits 20-15 of instruction)
+    mov REG(ebp), eax    ; THEN move value from register # esi to register # ebp
+.F:
+    jmp SPIN
+
+OP_OUT:
+    push DWORD REG(ebp)
+    call putchar
+    add esp, 4
+    jmp SPIN
+
+OP_READ:
+    mov ecx, 0x200
+    mov esi, REG(esi)    ; (esi = bits 20-15 of instruction)
+    shl esi, 9
+    lea esi, [DISK + esi]
+    mov edi, REG(ebp)
+    lea edi, PTR(edi)
+    rep movsb            ; read 512-byte DISK block whose number is in register # esi
+    jmp SPIN
